@@ -181,6 +181,67 @@ SYSTEM_PROMPT
   done
 }
 
+compress() {
+  local files=("$@")
+  local prompt
+  prompt=$(build_prompt "${files[@]}")
+
+  echo "Compressing via claude CLI..." >&2
+
+  local response
+  response=$(echo "$prompt" | env -u CLAUDECODE claude -p --model haiku --no-session-persistence 2>/dev/null)
+
+  if [[ -z "$response" ]]; then
+    echo "Error: claude CLI returned empty response" >&2
+    return 1
+  fi
+
+  echo "$response"
+}
+
+parse_compressed() {
+  local response="$1"
+  local current_file=""
+  local content=""
+  local in_block=false
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^---[[:space:]]+(/.+)$ ]]; then
+      if [[ -n "$current_file" && "$in_block" == true ]]; then
+        echo "$current_file"
+        printf '%s' "$content" | base64 -w 0; echo
+      fi
+      current_file="${BASH_REMATCH[1]}"
+      content=""
+      in_block=true
+    elif [[ "$line" == "---" && "$in_block" == true ]]; then
+      echo "$current_file"
+      printf '%s' "$content" | base64 -w 0; echo
+      current_file=""
+      content=""
+      in_block=false
+    elif [[ "$in_block" == true ]]; then
+      if [[ -n "$content" ]]; then
+        content="$content"$'\n'"$line"
+      else
+        content="$line"
+      fi
+    fi
+  done <<< "$response"
+
+  if [[ -n "$current_file" && "$in_block" == true ]]; then
+    echo "$current_file"
+    printf '%s' "$content" | base64 -w 0; echo
+  fi
+}
+
+count_tokens_string() {
+  local text="$1"
+  local words
+  words=$(echo "$text" | wc -w)
+  echo $(( (words * 13 + 5) / 10 ))
+}
+
 main() {
   parse_args "$@"
 
@@ -206,9 +267,83 @@ main() {
   local before_total
   before_total=$(echo "$token_output" | tail -1)
 
-  # Placeholder for Tasks 5-7
   echo ""
-  echo "(Compression not yet implemented)"
+  local response
+  response=$(compress "${files[@]}")
+
+  # Parse compressed output into associative array
+  declare -A compressed
+  local filepath encoded
+  while IFS= read -r filepath && IFS= read -r encoded; do
+    compressed["$filepath"]=$(echo "$encoded" | base64 -d)
+  done < <(parse_compressed "$response")
+
+  if [[ ${#compressed[@]} -eq 0 ]]; then
+    echo "Error: could not parse any compressed files from response."
+    echo "Raw response:"
+    echo "$response"
+    exit 1
+  fi
+
+  echo "=== Compressed ${#compressed[@]} files ==="
+
+  local after_total=0
+
+  for f in "${files[@]}"; do
+    if [[ -v "compressed[$f]" ]]; then
+      local before_tokens after_tokens saved pct
+      before_tokens=$(count_tokens "$f")
+      after_tokens=$(count_tokens_string "${compressed[$f]}")
+      saved=$((before_tokens - after_tokens))
+      if [[ $before_tokens -gt 0 ]]; then
+        pct=$(( (saved * 100) / before_tokens ))
+      else
+        pct=0
+      fi
+      after_total=$((after_total + after_tokens))
+
+      echo ""
+      echo "━━━ $f ━━━"
+      printf "Before: %d tokens → After: %d tokens (saved %d, %d%%)\n" \
+        "$before_tokens" "$after_tokens" "$saved" "$pct"
+      echo ""
+      diff --color=always -u <(cat "$f") <(echo "${compressed[$f]}") || true
+    else
+      echo ""
+      echo "━━━ $f ━━━"
+      echo "(not in compressed output — keeping as-is)"
+      local tokens
+      tokens=$(count_tokens "$f")
+      after_total=$((after_total + tokens))
+    fi
+  done
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  local total_saved total_pct
+  total_saved=$((before_total - after_total))
+  if [[ $before_total -gt 0 ]]; then
+    total_pct=$(( (total_saved * 100) / before_total ))
+  else
+    total_pct=0
+  fi
+  printf "TOTAL: %d → %d tokens (saved %d, %d%%)\n" \
+    "$before_total" "$after_total" "$total_saved" "$total_pct"
+
+  if [[ "$APPLY" == true ]]; then
+    echo ""
+    echo "=== Applying changes ==="
+    for f in "${files[@]}"; do
+      if [[ -v "compressed[$f]" ]]; then
+        echo "${compressed[$f]}" > "$f"
+        echo "  Wrote: $f"
+      fi
+    done
+    echo "Done."
+  else
+    echo ""
+    echo "Dry run — no files changed. Use --apply to write."
+  fi
 }
 
 main "$@"
