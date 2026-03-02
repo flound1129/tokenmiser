@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="0.1.0"
+APPLY=false
+EXCLUDES=()
+PROJECT_ROOT=""
+
+# Default exclusions (build artifacts and duplicates)
+DEFAULT_EXCLUDES=(
+  "node_modules"
+  ".next"
+  "dist"
+  "build"
+  ".worktrees"
+  ".claude/worktrees"
+  "__pycache__"
+  ".venv"
+)
+
+usage() {
+  cat <<'EOF'
+Usage: tokenmiser <project-root> [options]
+
+Compress CLAUDE.md and MEMORY.md files using AI-powered cross-layer deduplication.
+
+Options:
+  --apply             Write compressed files (default: dry-run)
+  --exclude <glob>    Additional paths to exclude (repeatable)
+  --version           Show version
+  -h, --help          Show this help
+
+Examples:
+  tokenmiser ~/nodeprojects          # dry-run, show diff
+  tokenmiser ~/nodeprojects --apply  # write compressed files
+  tokenmiser . --exclude '.next/**'  # exclude extra paths
+EOF
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --apply)
+        APPLY=true
+        shift
+        ;;
+      --exclude)
+        EXCLUDES+=("$2")
+        shift 2
+        ;;
+      --version)
+        echo "tokenmiser $VERSION"
+        exit 0
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      -*)
+        echo "Error: unknown option '$1'" >&2
+        usage >&2
+        exit 1
+        ;;
+      *)
+        if [[ -z "$PROJECT_ROOT" ]]; then
+          PROJECT_ROOT="$1"
+        else
+          echo "Error: unexpected argument '$1'" >&2
+          usage >&2
+          exit 1
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$PROJECT_ROOT" ]]; then
+    echo "Error: project root is required" >&2
+    usage >&2
+    exit 1
+  fi
+
+  PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd)"
+}
+
+discover_files() {
+  local root="$1"
+  local files=()
+
+  # Layer 1: Global CLAUDE.md
+  local global_claude="$HOME/.claude/CLAUDE.md"
+  if [[ -f "$global_claude" ]]; then
+    files+=("$global_claude")
+  fi
+
+  # Layer 2 + 3: Project root and sub-project CLAUDE.md files
+  # Build find exclusion args from defaults + user excludes
+  local all_excludes=("${DEFAULT_EXCLUDES[@]}" "${EXCLUDES[@]}")
+  local find_excludes=()
+  local first=true
+  for exc in "${all_excludes[@]}"; do
+    if $first; then
+      first=false
+    else
+      find_excludes+=(-o)
+    fi
+    find_excludes+=(-path "*/$exc/*" -o -path "*/$exc")
+  done
+
+  while IFS= read -r -d '' f; do
+    files+=("$f")
+  done < <(find "$root" \( "${find_excludes[@]}" \) -prune -o -name "CLAUDE.md" -print0 2>/dev/null)
+
+  # Layer: MEMORY.md — derive the project key from root path
+  local project_key
+  project_key=$(echo "$root" | sed 's|/|-|g')
+  local memory_file="$HOME/.claude/projects/$project_key/memory/MEMORY.md"
+  if [[ -f "$memory_file" ]]; then
+    files+=("$memory_file")
+  fi
+
+  printf '%s\n' "${files[@]}"
+}
+
+count_tokens() {
+  # Rough estimate: word count x 1.3
+  local file="$1"
+  local words
+  words=$(wc -w < "$file")
+  echo $(( (words * 13 + 5) / 10 ))
+}
+
+report_tokens() {
+  local files=("$@")
+  local total=0
+
+  for f in "${files[@]}"; do
+    local tokens
+    tokens=$(count_tokens "$f")
+    total=$((total + tokens))
+    printf "  %6d tokens  %s\n" "$tokens" "$f"
+  done
+
+  printf "  %6d tokens  TOTAL\n" "$total"
+  echo "$total"
+}
+
+build_prompt() {
+  local files=("$@")
+
+  cat <<'SYSTEM_PROMPT'
+You are a technical editor optimizing Claude Code configuration files for minimum token usage. You will receive a hierarchy of CLAUDE.md and MEMORY.md files that are loaded into Claude's context at session start.
+
+Rules:
+1. Preserve every directive's semantic meaning exactly. Do not drop, weaken, or alter any instruction.
+2. Remove duplication across layers. If a global rule already covers something, do not repeat it in project or sub-project files.
+3. Convert verbose prose to terse imperative directives.
+   Before: "You should always make sure to use the wrapper script for testing"
+   After:  "Use scripts/test.sh — never call pytest directly"
+4. Remove markdown structure that adds no information (empty sections, decorative headers, redundant code fences around short values).
+5. Preserve code blocks, paths, and command examples exactly.
+6. Do not add new directives or commentary.
+7. Do not wrap the output in a markdown code fence.
+
+Output each file in this exact format (one per file, in the same order as input):
+--- <filepath>
+<compressed content>
+---
+
+SYSTEM_PROMPT
+
+  echo "Here are the files in the hierarchy (global -> project -> sub-project):"
+  echo ""
+
+  for f in "${files[@]}"; do
+    echo "--- $f"
+    cat "$f"
+    echo ""
+    echo "---"
+    echo ""
+  done
+}
+
+main() {
+  parse_args "$@"
+
+  echo "=== Discovering files ==="
+  local files
+  mapfile -t files < <(discover_files "$PROJECT_ROOT")
+
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo "No CLAUDE.md or MEMORY.md files found."
+    exit 0
+  fi
+
+  echo "Found ${#files[@]} files:"
+  for f in "${files[@]}"; do
+    echo "  $f"
+  done
+
+  echo ""
+  echo "=== Current token usage ==="
+  local token_output
+  token_output=$(report_tokens "${files[@]}")
+  echo "$token_output" | head -n -1
+  local before_total
+  before_total=$(echo "$token_output" | tail -1)
+
+  # Placeholder for Tasks 5-7
+  echo ""
+  echo "(Compression not yet implemented)"
+}
+
+main "$@"
