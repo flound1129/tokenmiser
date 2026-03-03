@@ -192,7 +192,10 @@ compress() {
   local prompt
   prompt=$(build_prompt "${files[@]}")
 
-  echo "Compressing via claude CLI..." >&2
+  echo "Compressing ${#files[@]} files via claude CLI..." >&2
+  for f in "${files[@]}"; do
+    echo "  $f" >&2
+  done
 
   local response
   response=$(echo "$prompt" | env -u CLAUDECODE claude -p --model haiku --no-session-persistence 2>/dev/null)
@@ -313,7 +316,8 @@ main() {
       printf "Before: %d tokens → After: %d tokens (saved %d, %d%%)\n" \
         "$before_tokens" "$after_tokens" "$saved" "$pct"
       echo ""
-      diff --color=always -u <(cat "$f") <(echo "${compressed[$f]}") || true
+      diff --color=always -u --label "original: $f" --label "compressed: $f" \
+        <(cat "$f") <(echo "${compressed[$f]}") || true
     else
       echo ""
       echo "━━━ $f ━━━"
@@ -336,6 +340,14 @@ main() {
   printf "TOTAL: %d → %d tokens (saved %d, %d%%)\n" \
     "$before_total" "$after_total" "$total_saved" "$total_pct"
 
+  if [[ "$APPLY" != true ]]; then
+    echo ""
+    read -rp "Apply these changes? [y/N] " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+      APPLY=true
+    fi
+  fi
+
   if [[ "$APPLY" == true ]]; then
     echo ""
     echo "=== Applying changes ==="
@@ -347,8 +359,7 @@ main() {
     done
     echo "Done."
   else
-    echo ""
-    echo "Dry run — no files changed. Use --apply to write."
+    echo "No changes made."
   fi
 }
 
