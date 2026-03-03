@@ -25,15 +25,15 @@ Layer 3: <project-root>/**/CLAUDE.md                  (sub-project — loaded in
 ### CLI Interface
 
 ```
-tokenmiser <project-root>        # dry-run by default
-tokenmiser <project-root> --apply   # write compressed files
-tokenmiser . --exclude '.next/**'   # exclude paths
+tokenmiser <project-root>              # show diffs, prompt Y/N to apply
+tokenmiser <project-root> --apply      # apply without prompting
+tokenmiser . --exclude '.next/**'      # exclude extra paths
 ```
 
 **Options:**
-- Default: dry-run (show diff + token counts, write nothing)
-- `--apply`: write compressed files after showing diff
-- `--exclude <glob>`: skip matching paths
+- Default: show diffs + token counts, then prompt "Apply these changes? [y/N]"
+- `--apply`: skip prompt, write compressed files immediately
+- `--exclude <glob>`: additional paths to exclude (repeatable)
 
 ### Flow
 
@@ -42,15 +42,15 @@ tokenmiser . --exclude '.next/**'   # exclude paths
    - `<root>/CLAUDE.md` (project)
    - All `<root>/**/CLAUDE.md` (sub-projects)
    - Matching `~/.claude/projects/<key>/memory/MEMORY.md`
-   - Auto-exclude: `node_modules/`, `.next/`, `dist/`, `build/`, `.worktrees/`
+   - Auto-exclude: `node_modules/`, `.next/`, `dist/`, `build/`, `.worktrees/`, `.claude/worktrees/`, `__pycache__/`, `.venv/`
 
 2. **Token counting** — Word count x 1.3 as rough token estimate. Report per-file and total.
 
-3. **Compression** — Send all files to `claude` CLI with a structured prompt (see below). Claude returns compressed versions of each file.
+3. **Compression** — Send all files to `claude -p --model haiku` with a structured prompt. Lists files as they're sent for progress feedback. Uses `env -u CLAUDECODE` to allow running from within a Claude Code session.
 
-4. **Review** — Show unified diff per file with before/after token counts.
+4. **Review** — Show labeled unified diff per file with before/after token counts and percentage savings.
 
-5. **Apply** — With `--apply`, write compressed files. Without it, exit after showing the diff.
+5. **Apply** — Prompt user "Apply these changes? [y/N]". With `--apply`, skip prompt and write immediately.
 
 ### Compression Prompt
 
@@ -71,8 +71,9 @@ Rules:
    decorative headers, redundant code fences around short values).
 5. Preserve code blocks, paths, and command examples exactly.
 6. Do not add new directives or commentary.
+7. Do not wrap the output in a markdown code fence.
 
-Output each file as:
+Output each file in this exact format (one per file, in the same order as input):
 --- <filepath>
 <compressed content>
 ---
@@ -82,7 +83,8 @@ Output each file as:
 
 Automatically skip directories that contain build artifacts or duplicates:
 - `node_modules/`, `.next/`, `dist/`, `build/`
-- `.worktrees/` (copies of root CLAUDE.md)
+- `.worktrees/`, `.claude/worktrees/` (copies of root CLAUDE.md)
+- `__pycache__/`, `.venv/`
 
 ### Token Estimation
 
@@ -94,8 +96,8 @@ Word count x 1.3 (avoids tokenizer dependency, close enough for comparison).
 - Bash script with `claude` CLI integration
 - Discovery of CLAUDE.md hierarchy from a project root
 - AI-powered cross-layer deduplication and compression
-- Dry-run with diff output and token counts
-- `--apply` flag to write changes
+- Interactive apply prompt after showing diffs
+- `--apply` flag for non-interactive use
 
 **Out of scope (for now):**
 - Historical stats/tracking
