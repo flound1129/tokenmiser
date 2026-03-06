@@ -297,6 +297,7 @@ main() {
   echo "=== Compressed ${#compressed[@]} files ==="
 
   local after_total=0
+  local -a approved=()
 
   for f in "${files[@]}"; do
     if [[ -v "compressed[$f]" ]]; then
@@ -318,6 +319,16 @@ main() {
       echo ""
       diff --color=always -u --label "original: $f" --label "compressed: $f" \
         <(cat "$f") <(echo "${compressed[$f]}") || true
+
+      if [[ "$APPLY" == true ]]; then
+        approved+=("$f")
+      else
+        echo ""
+        read -rp "Apply this file? [y/N] " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+          approved+=("$f")
+        fi
+      fi
     else
       echo ""
       echo "━━━ $f ━━━"
@@ -340,22 +351,12 @@ main() {
   printf "TOTAL: %d → %d tokens (saved %d, %d%%)\n" \
     "$before_total" "$after_total" "$total_saved" "$total_pct"
 
-  if [[ "$APPLY" != true ]]; then
-    echo ""
-    read -rp "Apply these changes? [y/N] " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-      APPLY=true
-    fi
-  fi
-
-  if [[ "$APPLY" == true ]]; then
+  if [[ ${#approved[@]} -gt 0 ]]; then
     echo ""
     echo "=== Applying changes ==="
-    for f in "${files[@]}"; do
-      if [[ -v "compressed[$f]" ]]; then
-        echo "${compressed[$f]}" > "$f"
-        echo "  Wrote: $f"
-      fi
+    for f in "${approved[@]}"; do
+      echo "${compressed[$f]}" > "$f"
+      echo "  Wrote: $f"
     done
     echo "Done."
   else
