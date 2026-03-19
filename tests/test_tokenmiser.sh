@@ -56,7 +56,14 @@ done
 
 assert_eq "feedback_alpha.md discovered" "true" "$_found_alpha"
 assert_eq "feedback_beta.md discovered"  "true" "$_found_beta"
-unset _memdir _projdir _orig_home _discovered _found_alpha _found_beta _f
+
+_found_memory=false
+for _f in "${_discovered[@]}"; do
+  [[ "$_f" == *"MEMORY.md" ]] && _found_memory=true
+done
+assert_eq "MEMORY.md still discovered" "true" "$_found_memory"
+
+unset _memdir _projdir _orig_home _discovered _found_alpha _found_beta _found_memory _proj_key _f
 
 # ── results ──────────────────────────────────────────────────────────────────
 echo ""
