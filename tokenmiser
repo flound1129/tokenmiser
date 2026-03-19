@@ -332,6 +332,7 @@ apply_selected_hunks() {
   fi
 
   # Reconstruct: walk original file, substituting approved hunks
+  local -a _orig
   mapfile -t _orig < "$orig_file"
   local _pos=0  # 0-based index into _orig
 
