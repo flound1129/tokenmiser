@@ -56,7 +56,7 @@ done
 
 assert_eq "feedback_alpha.md discovered" "true" "$_found_alpha"
 assert_eq "feedback_beta.md discovered"  "true" "$_found_beta"
-unset _tmpdir _memdir _projdir _orig_home _discovered _found_alpha _found_beta _f
+unset _memdir _projdir _orig_home _discovered _found_alpha _found_beta _f
 
 # ── results ──────────────────────────────────────────────────────────────────
 echo ""
