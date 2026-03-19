@@ -118,10 +118,14 @@ discover_files() {
   # Layer: MEMORY.md — derive the project key from root path
   local project_key
   project_key=$(echo "$root" | sed 's|/|-|g')
-  local memory_file="$HOME/.claude/projects/$project_key/memory/MEMORY.md"
+  local memory_dir="$HOME/.claude/projects/$project_key/memory"
+  local memory_file="$memory_dir/MEMORY.md"
   if [[ -f "$memory_file" ]]; then
     files+=("$memory_file")
   fi
+  while IFS= read -r -d '' f; do
+    files+=("$f")
+  done < <(find "$memory_dir" -maxdepth 1 -name "feedback_*.md" -print0 2>/dev/null)
 
   if [[ ${#files[@]} -gt 0 ]]; then
     printf '%s\n' "${files[@]}"
