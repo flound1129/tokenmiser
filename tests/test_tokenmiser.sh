@@ -89,6 +89,33 @@ assert_eq "hunk 2 contains -line10" "true" \
 rm -f "$_orig" "$_new"
 unset _orig _new _plain_diff _color_diff _plain_hunks _color_hunks
 
+echo "=== apply_selected_hunks ==="
+_orig=$(mktemp); _new=$(mktemp)
+for i in $(seq -w 1 15); do printf "line%s\n" "$i"; done > "$_orig"
+awk 'NR==2{print "line02-new";next} NR==10{print "line10-new";next} {print}' "$_orig" > "$_new"
+_plain_diff=$(diff -u "$_orig" "$_new" || true)
+
+# All denied → output matches original
+_result=$(apply_selected_hunks "$_orig" "$_plain_diff")
+assert_eq "all denied = original" "$(cat "$_orig")" "$_result"
+
+# All approved → output matches new file
+_result=$(apply_selected_hunks "$_orig" "$_plain_diff" 1 2)
+assert_eq "all approved = new file" "$(cat "$_new")" "$_result"
+
+# Hunk 1 approved only → line02-new, line10 unchanged
+_expected=$(awk 'NR==2{print "line02-new";next} {print}' "$_orig")
+_result=$(apply_selected_hunks "$_orig" "$_plain_diff" 1)
+assert_eq "hunk 1 only approved" "$_expected" "$_result"
+
+# Hunk 2 approved only → line02 unchanged, line10-new
+_expected=$(awk 'NR==10{print "line10-new";next} {print}' "$_orig")
+_result=$(apply_selected_hunks "$_orig" "$_plain_diff" 2)
+assert_eq "hunk 2 only approved" "$_expected" "$_result"
+
+rm -f "$_orig" "$_new"
+unset _orig _new _plain_diff _result _expected
+
 # ── results ──────────────────────────────────────────────────────────────────
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

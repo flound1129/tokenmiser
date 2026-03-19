@@ -283,6 +283,89 @@ parse_hunks() {
   fi
 }
 
+apply_selected_hunks() {
+  # Usage: apply_selected_hunks <orig_file> <plain_diff> [hunk_num ...]
+  # Reconstructs file content applying only the listed (1-based) hunks.
+  # Uses the original file for unchanged regions and between-hunk lines.
+  local orig_file="$1"
+  local plain_diff="$2"
+  shift 2
+
+  local -A _approved
+  for h in "$@"; do _approved[$h]=1; done
+
+  # Pre-parse: collect hunk metadata from the diff headers
+  # h_start[i] = 0-based start line in original for hunk i+1
+  # h_count[i] = number of original lines the hunk spans
+  # h_new[i]   = reconstructed new content (context + additions, newline-separated)
+  local -a h_start h_count h_new
+  local _hn=0 _cur_start=0 _cur_count=0 _cur_new="" _in_hunk=false
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^"---" || "$line" =~ ^"+++" ]]; then
+      continue
+    elif [[ "$line" =~ @@\ -([0-9]+)(,([0-9]*))?\ \+ ]]; then
+      if [[ "$_in_hunk" == true ]]; then
+        h_start+=("$(( _cur_start - 1 ))")
+        h_count+=("$_cur_count")
+        h_new+=("$_cur_new")
+        (( _hn++ )) || true
+      fi
+      _cur_start="${BASH_REMATCH[1]}"
+      _cur_count="${BASH_REMATCH[3]}"
+      [[ -z "$_cur_count" ]] && _cur_count=1
+      _cur_new=""
+      _in_hunk=true
+    elif [[ "$_in_hunk" == true ]]; then
+      case "${line:0:1}" in
+        " "|"+")
+          [[ -n "$_cur_new" ]] && _cur_new+=$'\n'"${line:1}" || _cur_new="${line:1}" ;;
+      esac
+    fi
+  done <<< "$plain_diff"
+
+  if [[ "$_in_hunk" == true ]]; then
+    h_start+=("$(( _cur_start - 1 ))")
+    h_count+=("$_cur_count")
+    h_new+=("$_cur_new")
+    (( _hn++ )) || true
+  fi
+
+  # Reconstruct: walk original file, substituting approved hunks
+  mapfile -t _orig < "$orig_file"
+  local _pos=0  # 0-based index into _orig
+
+  for (( i=0; i<_hn; i++ )); do
+    local _h=$(( i + 1 ))  # 1-based hunk number
+    local _hs=${h_start[$i]}
+    local _hc=${h_count[$i]}
+
+    # Emit original lines before this hunk
+    while [[ $_pos -lt $_hs ]]; do
+      printf '%s\n' "${_orig[$_pos]}"
+      (( _pos++ )) || true
+    done
+
+    if [[ -n "${_approved[$_h]+_}" ]]; then
+      # Approved: emit new content (may be empty for pure deletions)
+      [[ -n "${h_new[$i]}" ]] && printf '%s\n' "${h_new[$i]}"
+    else
+      # Denied: emit original lines for this hunk
+      local _end=$(( _hs + _hc ))
+      for (( j=_hs; j<_end; j++ )); do
+        printf '%s\n' "${_orig[$j]}"
+      done
+    fi
+    _pos=$(( _hs + _hc ))
+  done
+
+  # Emit remaining original lines after last hunk
+  while [[ $_pos -lt ${#_orig[@]} ]]; do
+    printf '%s\n' "${_orig[$_pos]}"
+    (( _pos++ )) || true
+  done
+}
+
 main() {
   parse_args "$@"
 
