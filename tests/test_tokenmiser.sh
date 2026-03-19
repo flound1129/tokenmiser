@@ -65,6 +65,30 @@ assert_eq "MEMORY.md still discovered" "true" "$_found_memory"
 
 unset _memdir _projdir _orig_home _discovered _found_alpha _found_beta _found_memory _proj_key _f
 
+echo "=== parse_hunks ==="
+# Build a 15-line file with changes at lines 2 and 10 (far enough apart for 2 hunks)
+_orig=$(mktemp); _new=$(mktemp)
+for i in $(seq -w 1 15); do printf "line%s\n" "$i"; done > "$_orig"
+awk 'NR==2{print "line02-new";next} NR==10{print "line10-new";next} {print}' "$_orig" > "$_new"
+
+_plain_diff=$(diff -u "$_orig" "$_new" || true)
+_color_diff=$(diff --color=always -u "$_orig" "$_new" || true)
+
+_plain_hunks=()
+parse_hunks _plain_hunks "$_plain_diff"
+_color_hunks=()
+parse_hunks _color_hunks "$_color_diff"
+
+assert_eq "plain hunk count is 2"  "2" "${#_plain_hunks[@]}"
+assert_eq "color hunk count is 2"  "2" "${#_color_hunks[@]}"
+assert_eq "hunk 1 contains -line02" "true" \
+  "$([[ "${_plain_hunks[0]}" == *"-line02"* ]] && echo true || echo false)"
+assert_eq "hunk 2 contains -line10" "true" \
+  "$([[ "${_plain_hunks[1]}" == *"-line10"* ]] && echo true || echo false)"
+
+rm -f "$_orig" "$_new"
+unset _orig _new _plain_diff _color_diff _plain_hunks _color_hunks
+
 # ── results ──────────────────────────────────────────────────────────────────
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

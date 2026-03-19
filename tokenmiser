@@ -255,6 +255,34 @@ count_tokens_string() {
   echo $(( (words * 13 + 5) / 10 ))
 }
 
+parse_hunks() {
+  # Usage: parse_hunks <nameref_array> <diff_output>
+  # Fills nameref_array with one entry per @@ block.
+  # Works with both plain and colored diff: colored @@ lines are prefixed with
+  # ANSI escape codes, so we match on the @@ ... @@ content pattern, not ^@@.
+  local -n _ph=$1
+  local diff_output="$2"
+  local current="" in_hunk=false
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^"---" || "$line" =~ ^"+++" ]]; then
+      continue
+    elif [[ "$line" =~ @@\ -[0-9]+.*\ \+[0-9]+ ]]; then
+      if [[ "$in_hunk" == true ]]; then
+        _ph+=("$current")
+      fi
+      current="$line"
+      in_hunk=true
+    elif [[ "$in_hunk" == true ]]; then
+      current+=$'\n'"$line"
+    fi
+  done <<< "$diff_output"
+
+  if [[ "$in_hunk" == true && -n "$current" ]]; then
+    _ph+=("$current")
+  fi
+}
+
 main() {
   parse_args "$@"
 
