@@ -18,13 +18,13 @@ Replace the per-file `Apply this file? [y/N]` prompt with a per-hunk loop. Each 
 
 ### Feature 2: Feedback file discovery
 
-Extend `discover_files` to also collect `feedback_*.md` files from the project memory directory alongside `MEMORY.md`. These files are included in the same AI compression prompt, diff/review loop, and apply step — no special handling.
+Extend `discover_files` to also collect `feedback_*.md` files from the project memory directory. The `find` for feedback files runs unconditionally — the memory directory may contain feedback files even if MEMORY.md is absent. These files join the same AI compression prompt, diff/review loop, and apply step with no special handling.
 
 ## Design
 
 ### Discovery changes
 
-In `discover_files`, after finding the MEMORY.md file for the project key, glob all `feedback_*.md` files in the same directory and append them to the files array.
+In `discover_files`, after handling MEMORY.md, unconditionally glob `feedback_*.md` files in the same memory directory and append them to the files array:
 
 ```bash
 local memory_dir="$HOME/.claude/projects/$project_key/memory"
@@ -37,32 +37,36 @@ while IFS= read -r -d '' f; do
 done < <(find "$memory_dir" -maxdepth 1 -name "feedback_*.md" -print0 2>/dev/null)
 ```
 
+The `2>/dev/null` on `find` silently handles a missing memory directory.
+
 ### Per-hunk approval flow
 
 For each file with compressed output:
 
-1. Compute unified diff between original file and compressed string
-2. Parse diff into numbered hunks (split on `@@` lines)
-3. For each hunk:
+1. Compute a **plain** unified diff (`diff -u`, no color) between the original file and the compressed string — used for reconstruction.
+2. Compute a **colored** unified diff (`diff --color=always -u`) of the same inputs — used for display only.
+3. Pre-scan the plain diff to count `@@` lines, establishing `Total` hunk count.
+4. Collect all hunks from the plain diff into an indexed array (one entry per `@@` block, including its context and change lines). Build a parallel indexed array from the colored diff in the same pass, used for display only.
+5. For each hunk index `N` (1-based):
    - Display: `Hunk N/Total ━━━━━━━━━━━━━━━━━━━━━━━`
-   - Display the hunk content with color (red `-`, green `+`)
+   - Display hunk `N` from the colored diff array
    - Prompt: `Apply? [y/N]`
-   - Collect approved hunk indices
-4. Reconstruct output using approved hunks (see below)
-5. Show per-file token savings for the approved combination
-6. Queue for writing if at least one hunk was approved
+   - Record approved hunk indices
+6. Reconstruct the output file from the plain diff and the approved set (see below). Store result in `reconstructed[$f]`.
+7. Compute and display per-file token savings reflecting only the approved hunks. **Note:** this is a behavioral change from the current flow, which shows savings before the prompt. Savings are now shown after all hunks are answered.
+8. If at least one hunk was approved, queue `$f` for writing using `reconstructed[$f]`.
 
 ### File reconstruction
 
-Walk the unified diff line by line, tracking the current hunk number:
+Walk the **plain** unified diff line by line, tracking the current hunk number (incremented on each `@@` line). Emit lines as follows:
 
-- `@@` line → increment hunk counter
+- `@@` line → increment hunk counter; skip (do not emit)
 - `---`/`+++` header lines → skip
-- ` ` (context) lines → always output
-- `-` lines → output only if current hunk is **denied** (keep original)
-- `+` lines → output only if current hunk is **approved** (use compressed)
+- ` ` prefix (context line) → emit the content (strip leading space)
+- `-` prefix → emit content only if current hunk is **denied** (keep original line)
+- `+` prefix → emit content only if current hunk is **approved** (use compressed line)
 
-This produces the correct reconstructed content without requiring `patch` or external tools.
+This produces valid file content without requiring `patch` or any external tools. Store the result in `reconstructed[$f]`.
 
 ### Edge cases
 
@@ -70,8 +74,9 @@ This produces the correct reconstructed content without requiring `patch` or ext
 |---|---|
 | All hunks denied | File unchanged, no write |
 | All hunks approved | Equivalent to full-file apply |
-| Partial approval | Reconstructed file with mixed content written |
-| `--apply` flag | All hunks auto-approved, no prompts (unchanged) |
+| Partial approval | `reconstructed[$f]` written with mixed original/compressed content |
+| No diff produced (compressed = original) | Zero iterations of the hunk loop; file unchanged, no write |
+| `--apply` flag | All hunks auto-approved, no prompts (unchanged behavior) |
 | File missing from compressed output | Kept as-is (unchanged) |
 
 ### Hunk display format
@@ -88,7 +93,7 @@ This produces the correct reconstructed content without requiring `patch` or ext
 Apply? [y/N]
 ```
 
-Color: red for removed lines, green for added lines (using existing `--color=always` diff output).
+Color output comes from the separate `--color=always` diff invocation. The plain diff is used only for reconstruction logic — never displayed.
 
 ## Scope
 
@@ -96,6 +101,7 @@ Color: red for removed lines, green for added lines (using existing `--color=alw
 - Per-hunk approval replacing per-file approval
 - `feedback_*.md` discovery and inclusion in compression pass
 - File reconstruction from selectively applied hunks
+- Two-pass diff: plain for reconstruction, colored for display
 
 **Out of scope:**
 - Changes to `--apply` behavior
@@ -106,5 +112,5 @@ Color: red for removed lines, green for added lines (using existing `--color=alw
 
 - User can approve some hunks and deny others within a single file
 - Resulting file is valid (no garbled content from partial application)
-- `feedback_*.md` files appear in discovery and are included in the AI prompt
+- `feedback_*.md` files appear in discovery regardless of whether MEMORY.md exists
 - `--apply` continues to work without prompts
