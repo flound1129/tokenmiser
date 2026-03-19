@@ -398,6 +398,7 @@ main() {
 
   # Parse compressed output into associative array
   declare -A compressed
+  declare -A reconstructed
   local filepath encoded
   while IFS= read -r filepath && IFS= read -r encoded; do
     compressed["$filepath"]=$(echo "$encoded" | base64 -d)
@@ -417,33 +418,69 @@ main() {
 
   for f in "${files[@]}"; do
     if [[ -v "compressed[$f]" ]]; then
-      local before_tokens after_tokens saved pct
+      local before_tokens
       before_tokens=$(count_tokens "$f")
-      after_tokens=$(count_tokens_string "${compressed[$f]}")
-      saved=$((before_tokens - after_tokens))
-      if [[ $before_tokens -gt 0 ]]; then
-        pct=$(( (saved * 100) / before_tokens ))
-      else
-        pct=0
-      fi
-      after_total=$((after_total + after_tokens))
 
       echo ""
       echo "━━━ $f ━━━"
-      printf "Before: %d tokens → After: %d tokens (saved %d, %d%%)\n" \
-        "$before_tokens" "$after_tokens" "$saved" "$pct"
-      echo ""
-      diff --color=always -u --label "original: $f" --label "compressed: $f" \
-        <(cat "$f") <(echo "${compressed[$f]}") || true
 
       if [[ "$APPLY" == true ]]; then
+        local after_tokens saved pct
+        after_tokens=$(count_tokens_string "${compressed[$f]}")
+        saved=$(( before_tokens - after_tokens ))
+        pct=$(( before_tokens > 0 ? (saved * 100) / before_tokens : 0 ))
+        printf "Before: %d tokens → After: %d tokens (saved %d, %d%%)\n" \
+          "$before_tokens" "$after_tokens" "$saved" "$pct"
+        reconstructed["$f"]="${compressed[$f]}"
         approved+=("$f")
+        after_total=$(( after_total + after_tokens ))
       else
-        echo ""
-        read -rp "Apply this file? [y/N] " confirm
-        if [[ "$confirm" =~ ^[Yy]$ ]]; then
-          approved+=("$f")
+        # Compute plain diff for reconstruction; colored diff for display
+        local plain_diff color_diff
+        plain_diff=$(diff -u <(cat "$f") <(printf '%s' "${compressed[$f]}") || true)
+
+        if [[ -z "$plain_diff" ]]; then
+          echo "(no changes — keeping as-is)"
+          after_total=$(( after_total + before_tokens ))
+          continue
         fi
+
+        color_diff=$(diff --color=always -u \
+          --label "original: $f" --label "compressed: $f" \
+          <(cat "$f") <(printf '%s' "${compressed[$f]}") || true)
+
+        local -a plain_hunks=() color_hunks=()
+        parse_hunks plain_hunks "$plain_diff"
+        parse_hunks color_hunks "$color_diff"
+        local total_hunks=${#plain_hunks[@]}
+        local -a approved_hunks=()
+
+        for (( i=0; i<total_hunks; i++ )); do
+          local hunk_num=$(( i + 1 ))
+          echo ""
+          printf "  Hunk %d/%d  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" \
+            "$hunk_num" "$total_hunks"
+          echo "${color_hunks[$i]}"
+          echo ""
+          read -rp "Apply? [y/N] " confirm
+          if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            approved_hunks+=("$hunk_num")
+          fi
+        done
+
+        local after_tokens saved pct
+        if [[ ${#approved_hunks[@]} -gt 0 ]]; then
+          reconstructed["$f"]=$(apply_selected_hunks "$f" "$plain_diff" "${approved_hunks[@]}")
+          approved+=("$f")
+          after_tokens=$(count_tokens_string "${reconstructed[$f]}")
+        else
+          after_tokens=$before_tokens
+        fi
+        saved=$(( before_tokens - after_tokens ))
+        pct=$(( before_tokens > 0 ? (saved * 100) / before_tokens : 0 ))
+        printf "After selection: %d → %d tokens (saved %d, %d%%)\n" \
+          "$before_tokens" "$after_tokens" "$saved" "$pct"
+        after_total=$(( after_total + after_tokens ))
       fi
     else
       echo ""
@@ -451,7 +488,7 @@ main() {
       echo "(not in compressed output — keeping as-is)"
       local tokens
       tokens=$(count_tokens "$f")
-      after_total=$((after_total + tokens))
+      after_total=$(( after_total + tokens ))
     fi
   done
 
@@ -471,7 +508,7 @@ main() {
     echo ""
     echo "=== Applying changes ==="
     for f in "${approved[@]}"; do
-      echo "${compressed[$f]}" > "$f"
+      printf '%s' "${reconstructed[$f]}" > "$f"
       echo "  Wrote: $f"
     done
     echo "Done."
